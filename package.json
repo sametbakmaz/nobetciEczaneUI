@@ -22,6 +22,7 @@
     "@react-navigation/native": "^7.1.0",
     "@react-navigation/native-stack": "^7.3.4",
     "expo": "~52.0.39",
+    "expo-ads-admob": "^13.0.0",
     "expo-blur": "~14.0.3",
     "expo-constants": "~17.0.8",
     "expo-device": "~7.0.3",
@@ -51,8 +52,7 @@
     "react-native-unimodules": "^0.15.0",
     "react-native-web": "~0.19.13",
     "react-native-webview": "13.12.5",
-    "turkey-neighbourhoods": "^4.0.3",
-    "expo-ads-admob": "13.0.0"
+    "turkey-neighbourhoods": "^4.0.3"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
