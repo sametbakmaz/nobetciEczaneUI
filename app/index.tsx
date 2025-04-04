@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Platform, TouchableOpacity, Dimensions, ActionSheetIOS, Linking, Image, StatusBar, Alert, ViewStyle } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Platform, TouchableOpacity, Dimensions, ActionSheetIOS, Linking, Image, StatusBar, Alert, ViewStyle, TextInput } from 'react-native';
 import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { 
@@ -15,6 +15,13 @@ import Animated, {
   SlideOutDown
 } from 'react-native-reanimated';
 import * as Location from 'expo-location';
+import * as Notifications from 'expo-notifications';
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// AdMob kodunu geçici olarak kaldırıyoruz
+// import * as Admob from 'expo-ads-admob';
 
 interface Pharmacy {
   isim: string;
@@ -25,6 +32,7 @@ interface Pharmacy {
   mahalle: string;
   latitude: number;
   longitude: number;
+  isFavorite?: boolean;
 }
 
 interface City {
@@ -117,6 +125,21 @@ const Select: React.FC<SelectProps> = ({ label, value, items, onValueChange, loa
   );
 };
 
+// Bildirim ayarlarını yapılandır
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+});
+
+// Banner Reklam componenti - geçici olarak devre dışı
+const BannerAd = () => {
+  // Reklam kodu geçici olarak devre dışı
+  return null;
+};
+
 export default function Index() {
   const [selectedCity, setSelectedCity] = useState<string>('');
   const [selectedCityId, setSelectedCityId] = useState<number>(0);
@@ -140,6 +163,13 @@ export default function Index() {
   const listOpacity = useSharedValue(1);
   const detailsHeight = useSharedValue(0);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
+  const [notification, setNotification] = useState<Notifications.Notification | null>(null);
+  const notificationListener = useRef<Notifications.Subscription>();
+  const responseListener = useRef<Notifications.Subscription>();
+  const [favoritePharmacies, setFavoritePharmacies] = useState<Pharmacy[]>([]);
+  const [activeTab, setActiveTab] = useState<'all' | 'favorites'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const initialLoadingContainer: ViewStyle = {
     flex: 1,
@@ -192,7 +222,7 @@ export default function Index() {
             setSelectedDistrict(districtName);
             
             // Doğrudan eczaneleri getir
-            const endpoint = `https://06bc-95-70-207-150.ngrok-free.app/api/eczaneler/${cityName.toLowerCase()}/${districtName.toLowerCase()}`;
+            const endpoint = `https://bf40-95-70-207-209.ngrok-free.app/api/eczaneler/${cityName.toLowerCase()}/${districtName.toLowerCase()}`;
             console.log('Eczaneler için endpoint:', endpoint);
             
             const response = await fetch(endpoint);
@@ -283,66 +313,166 @@ export default function Index() {
     };
   }, []);
 
+  useEffect(() => {
+    console.log('Uygulama başlatılıyor, push notification kaydı yapılacak...');
+    registerForPushNotificationsAsync().then(token => {
+      if (token) {
+        console.log('Push Token state\'e kaydediliyor:', token);
+        setExpoPushToken(token);
+        
+        console.log('Token backend\'e gönderiliyor...');
+        fetch('https://bf40-95-70-207-209.ngrok-free.app/api/register-device', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            token: token,
+            platform: Platform.OS
+          }),
+        }).then(response => {
+          console.log('Backend yanıtı:', response.status);
+          return response.json();
+        }).then(data => {
+          console.log('Backend yanıt detayı:', data);
+        }).catch(error => {
+          console.error('Token kayıt hatası:', error);
+        });
+      } else {
+        console.log('Push token alınamadı');
+      }
+    });
+
+    // Bildirim izinlerini kontrol et
+    Notifications.getPermissionsAsync().then(permission => {
+      console.log('Bildirim izinleri:', permission);
+    });
+
+    notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
+      console.log('Bildirim alındı:', notification);
+      setNotification(notification);
+    });
+
+    responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
+      console.log('Bildirime tıklandı:', response);
+    });
+
+    return () => {
+      if (notificationListener.current) {
+        Notifications.removeNotificationSubscription(notificationListener.current);
+      }
+      if (responseListener.current) {
+        Notifications.removeNotificationSubscription(responseListener.current);
+      }
+    };
+  }, []);
+
   const loadCities = async () => {
     try {
       setCitiesLoading(true);
-      const response = await fetch('https://06bc-95-70-207-150.ngrok-free.app/api/cities');
-      const data = await response.json();
+      const response = await fetch('https://bf40-95-70-207-209.ngrok-free.app/api/cities');
+      const responseText = await response.text();
+      console.log('Şehirler API yanıtı:', responseText);
       
-      if (data.status && data.data) {
+      if (!response.ok) {
+        console.error('Şehirler API Hatası:', {
+          status: response.status,
+          statusText: response.statusText,
+          response: responseText
+        });
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const data = JSON.parse(responseText);
+      if (data && data.status && data.data) {
         setCities(data.data);
+      } else {
+        console.error('Geçersiz şehir verisi:', data);
+        setCities([]);
       }
     } catch (error) {
       console.error('Şehirler yüklenirken hata:', error);
+      setCities([]);
     } finally {
       setCitiesLoading(false);
     }
   };
 
   const fetchDistricts = async (cityId: number) => {
-    setLoading(true);
     try {
-      const response = await fetch(`https://06bc-95-70-207-150.ngrok-free.app/api/cities/${cityId}/districts`);
-      const data = await response.json();
+      setLoading(true);
+      console.log('İlçeler için şehir ID:', cityId);
+      const response = await fetch(`https://bf40-95-70-207-209.ngrok-free.app/api/cities/${cityId}/districts`);
+      const responseText = await response.text();
+      console.log('İlçeler API yanıtı:', responseText);
       
-      if (data.status && data.data) {
-        const districtsWithId = data.data.map((district: { name: string }, index: number) => ({
-          id: index + 1,
-          name: district.name
-        }));
-        setDistricts(districtsWithId);
-        return districtsWithId;
+      if (!response.ok) {
+        console.error('İlçeler API Hatası:', {
+          status: response.status,
+          statusText: response.statusText,
+          response: responseText
+        });
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
-      return [];
+      
+      const data = JSON.parse(responseText);
+      if (data && data.status && data.data) {
+        setDistricts(data.data);
+      } else {
+        console.error('Geçersiz ilçe verisi:', data);
+        setDistricts([]);
+      }
     } catch (error) {
       console.error('İlçeler yüklenirken hata:', error);
       setDistricts([]);
-      return [];
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchPharmacies = async (city?: string, district?: string) => {
-    setLoading(true);
+  const fetchPharmacies = async (city: string, district?: string) => {
     try {
-      const cityToUse = city || selectedCity;
-      const districtToUse = district || selectedDistrict;
+      setLoading(true);
+      // Türkçe karakterleri düzelt
+      const normalizedCity = city.toLowerCase()
+        .replace('ı', 'i')
+        .replace('ğ', 'g')
+        .replace('ü', 'u')
+        .replace('ş', 's')
+        .replace('ö', 'o')
+        .replace('ç', 'c');
       
-      const baseUrl = 'http://0.0.0.0:8000/api/eczaneler';
-      const endpoint = districtToUse 
-        ? `${baseUrl}/${cityToUse.toLowerCase()}/${districtToUse.toLowerCase()}`
-        : `${baseUrl}/${cityToUse.toLowerCase()}`;
+      const normalizedDistrict = district ? district.toLowerCase()
+        .replace('ı', 'i')
+        .replace('ğ', 'g')
+        .replace('ü', 'u')
+        .replace('ş', 's')
+        .replace('ö', 'o')
+        .replace('ç', 'c') : undefined;
+
+      const baseUrl = 'https://bf40-95-70-207-209.ngrok-free.app/api/eczaneler';
+      const endpoint = normalizedDistrict 
+        ? `${baseUrl}/${normalizedCity}/${normalizedDistrict}` 
+        : `${baseUrl}/${normalizedCity}`;
       
       console.log('Eczaneler için endpoint:', endpoint);
       
       const response = await fetch(endpoint);
-      const data = await response.json();
+      const responseText = await response.text();
+      console.log('Eczaneler API yanıtı:', responseText);
       
-      if (data.status && data.data) {
-        console.log('Bulunan eczane sayısı:', data.data.length);
-        setPharmacies(data.data);
-        
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const data = JSON.parse(responseText);
+      if (data && data.status && data.data) {
+        // Eczaneleri favori durumlarıyla birlikte ayarla
+        const pharmaciesWithFavorites = data.data.map((pharmacy: Pharmacy) => ({
+          ...pharmacy,
+          isFavorite: favoritePharmacies.some(fav => fav.isim === pharmacy.isim)
+        }));
+        setPharmacies(pharmaciesWithFavorites);
         if (data.data.length > 0) {
           const firstPharmacy = data.data[0];
           setRegion({
@@ -352,6 +482,9 @@ export default function Index() {
             longitudeDelta: 0.02,
           });
         }
+      } else {
+        console.error('Geçersiz eczane verisi:', data);
+        setPharmacies([]);
       }
     } catch (error) {
       console.error('Eczaneler yüklenirken hata:', error);
@@ -367,13 +500,59 @@ export default function Index() {
   };
 
   const handleGetDirections = (pharmacy: Pharmacy) => {
-    const url = Platform.select({
-      ios: `maps://app?daddr=${pharmacy.latitude},${pharmacy.longitude}`,
-      android: `google.navigation:q=${pharmacy.latitude},${pharmacy.longitude}`
-    });
+    if (Platform.OS === 'ios') {
+      const options = ['İptal', 'Apple Haritalar', 'Google Haritalar', 'Yandex Navi'];
+      const cancelButtonIndex = 0;
 
-    if (url) {
-      Linking.openURL(url);
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options,
+          cancelButtonIndex,
+          title: 'Yol Tarifi',
+          message: 'Harita uygulaması seçin',
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 1) {
+            // Apple Haritalar
+            Linking.openURL(`maps://app?daddr=${pharmacy.latitude},${pharmacy.longitude}`);
+          } else if (buttonIndex === 2) {
+            // Google Haritalar
+            Linking.openURL(`comgooglemaps://?daddr=${pharmacy.latitude},${pharmacy.longitude}`);
+          } else if (buttonIndex === 3) {
+            // Yandex Navi
+            Linking.openURL(`yandexnavi://build_route_on_map?lat_to=${pharmacy.latitude}&lon_to=${pharmacy.longitude}`);
+          }
+        }
+      );
+    } else {
+      // Android için harita uygulamalarını kontrol et
+      const googleMapsUrl = `google.navigation:q=${pharmacy.latitude},${pharmacy.longitude}`;
+      const yandexMapsUrl = `yandexmaps://maps.yandex.com/?pt=${pharmacy.longitude},${pharmacy.latitude}&z=15`;
+      const yandexNaviUrl = `yandexnavi://build_route_on_map?lat_to=${pharmacy.latitude}&lon_to=${pharmacy.longitude}`;
+      
+      // Önce Google Maps'i kontrol et
+      Linking.canOpenURL(googleMapsUrl).then((supported) => {
+        if (supported) {
+          Linking.openURL(googleMapsUrl);
+        } else {
+          // Google Maps yüklü değilse Yandex Maps'i dene
+          Linking.canOpenURL(yandexMapsUrl).then((yandexSupported) => {
+            if (yandexSupported) {
+              // Yandex Maps yüklüyse, Yandex Navi'yi kontrol et
+              Linking.canOpenURL(yandexNaviUrl).then((yandexNaviSupported) => {
+                if (yandexNaviSupported) {
+                  Linking.openURL(yandexNaviUrl);
+                } else {
+                  Linking.openURL(yandexMapsUrl);
+                }
+              });
+            } else {
+              // Hiçbir harita uygulaması yüklü değilse web tarayıcıda aç
+              Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${pharmacy.latitude},${pharmacy.longitude}`);
+            }
+          });
+        }
+      });
     }
   };
 
@@ -454,6 +633,61 @@ export default function Index() {
     }
   };
 
+  // Favori eczaneleri yükle
+  useEffect(() => {
+    const loadFavorites = async () => {
+      try {
+        const favorites = await AsyncStorage.getItem('favoritePharmacies');
+        if (favorites) {
+          setFavoritePharmacies(JSON.parse(favorites));
+        }
+      } catch (error) {
+        console.error('Favoriler yüklenirken hata:', error);
+      }
+    };
+    loadFavorites();
+  }, []);
+
+  // Favori eczane ekle/çıkar
+  const toggleFavorite = async (pharmacy: Pharmacy) => {
+    try {
+      // Eczane zaten favorilerde mi kontrol et
+      const isAlreadyFavorite = favoritePharmacies.some(fav => fav.isim === pharmacy.isim);
+      
+      let updatedFavorites;
+      if (isAlreadyFavorite) {
+        // Eczaneyi favorilerden çıkar
+        updatedFavorites = favoritePharmacies.filter(p => p.isim !== pharmacy.isim);
+      } else {
+        // Eczaneyi favorilere ekle
+        updatedFavorites = [...favoritePharmacies, { ...pharmacy, isFavorite: true }];
+      }
+      
+      // Favorileri güncelle
+      setFavoritePharmacies(updatedFavorites);
+      
+      // Ana sayfadaki eczane listesini güncelle
+      setPharmacies(prevPharmacies => 
+        prevPharmacies.map(p => 
+          p.isim === pharmacy.isim 
+            ? { ...p, isFavorite: !isAlreadyFavorite }
+            : p
+        )
+      );
+      
+      // AsyncStorage'a kaydet
+      await AsyncStorage.setItem('favoritePharmacies', JSON.stringify(updatedFavorites));
+    } catch (error) {
+      console.error('Favori güncellenirken hata:', error);
+    }
+  };
+
+  // Favorileri filtrele
+  const filteredFavorites = favoritePharmacies.filter(pharmacy =>
+    pharmacy.isim.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    pharmacy.adres.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#E53935" />
@@ -476,164 +710,213 @@ export default function Index() {
             style={styles.viewToggle}
             entering={FadeIn.duration(500)}
           >
-            <Ionicons 
-              name={showMap ? "list" : "map"} 
-              size={24} 
-              color="#fff" 
-            />
+              <Ionicons 
+                name={showMap ? "list" : "map"} 
+                size={24} 
+                color="#fff" 
+              />
           </AnimatedTouchableOpacity>
         </View>
       </Animated.View>
+      
+      {/* Tab Bar */}
+      <View style={styles.tabBar}>
+        <TouchableOpacity 
+          style={[styles.tabButton, activeTab === 'all' && styles.activeTab]}
+          onPress={() => setActiveTab('all')}
+        >
+          <Ionicons 
+            name="medical" 
+            size={24} 
+            color={activeTab === 'all' ? '#E53935' : '#666'} 
+          />
+          <Text style={[styles.tabText, activeTab === 'all' && styles.activeTabText]}>
+            Tüm Eczaneler
+          </Text>
+            </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.tabButton, activeTab === 'favorites' && styles.activeTab]}
+          onPress={() => setActiveTab('favorites')}
+        >
+          <Ionicons 
+            name="heart" 
+            size={24} 
+            color={activeTab === 'favorites' ? '#E53935' : '#666'} 
+          />
+          <Text style={[styles.tabText, activeTab === 'favorites' && styles.activeTabText]}>
+            Favoriler
+          </Text>
+        </TouchableOpacity>
+      </View>
       
       {initialLoading ? (
         <Animated.View 
           style={initialLoadingContainer}
           entering={FadeIn.duration(500)}
         >
-          <View style={loadingIconContainer}>
-            <Animated.View
-              entering={SlideInDown.duration(800)}
-            >
-              <Ionicons name="medical" size={64} color="#E53935" />
-            </Animated.View>
-          </View>
           <Text style={styles.initialLoadingText}>Nöbetçi Eczaneler</Text>
-          <Text style={styles.initialLoadingSubtext}>Etrafınızdaki nöbetçi eczaneler aranıyor...</Text>
+          <Text style={styles.initialLoadingSubtext}>Size en yakın nöbetçi eczaneler aranıyor...</Text>
           <ActivityIndicator size="large" color="#E53935" style={{ marginTop: 20 }} />
         </Animated.View>
       ) : (
         <>
-          <View style={styles.searchContainer}>
-            <Animated.View 
-              style={[styles.searchBox]}
-              entering={SlideInDown.duration(1000).delay(200)}
-            >
-              <Select
-                label="İl"
-                value={selectedCity}
-                items={cities}
-                onValueChange={async (name, id) => {
-                  setSelectedCity(name);
-                  setSelectedCityId(id);
-                  setSelectedDistrict('');
-                  setPharmacies([]);
-                  
-                  // Sadece il için eczaneleri getir
-                  const baseUrl = 'https://06bc-95-70-207-150.ngrok-free.app/api/eczaneler';
-                  const endpoint = `${baseUrl}/${name.toLowerCase()}`;
-                  console.log('İl için eczane endpoint:', endpoint);
-                  
-                  try {
-                    setLoading(true);
-                    const response = await fetch(endpoint);
-                    const data = await response.json();
-                    
-                    if (data.status && data.data) {
-                      console.log('Bulunan eczane sayısı:', data.data.length);
-                      setPharmacies(data.data);
-                      
-                      if (data.data.length > 0) {
-                        const firstPharmacy = data.data[0];
-                        setRegion({
-                          latitude: firstPharmacy.latitude,
-                          longitude: firstPharmacy.longitude,
-                          latitudeDelta: 0.02,
-                          longitudeDelta: 0.02,
-                        });
-                      }
-                    }
-                  } catch (error) {
-                    console.error('Eczaneler yüklenirken hata:', error);
+      <View style={styles.searchContainer}>
+            {activeTab === 'all' ? (
+              <Animated.View 
+                style={[styles.searchBox]}
+                entering={SlideInDown.duration(1000).delay(200)}
+              >
+          <Select
+            label="İl"
+            value={selectedCity}
+            items={cities}
+                  onValueChange={async (name, id) => {
+              setSelectedCity(name);
+              setSelectedCityId(id);
+              setSelectedDistrict('');
                     setPharmacies([]);
-                  } finally {
-                    setLoading(false);
-                  }
-                  
-                  // İlçeleri yükle
-                  await fetchDistricts(id);
-                }}
-                loading={citiesLoading}
-              />
-
-              {selectedCity && (
-                <Select
-                  label="İlçe"
-                  value={selectedDistrict}
-                  items={districts}
-                  onValueChange={async (name) => {
-                    setSelectedDistrict(name);
-                    if (selectedCity && name) {
-                      const baseUrl = 'https://06bc-95-70-207-150.ngrok-free.app/api/eczaneler';
-                      const endpoint = `${baseUrl}/${selectedCity.toLowerCase()}/${name.toLowerCase()}`;
-                      console.log('İl ve ilçe için eczane endpoint:', endpoint);
+                    
+                    // Sadece il için eczaneleri getir
+                    const baseUrl = 'https://bf40-95-70-207-209.ngrok-free.app/api/eczaneler';
+                    const endpoint = `${baseUrl}/${name.toLowerCase()}`;
+                    console.log('İl için eczane endpoint:', endpoint);
+                    
+                    try {
+                      setLoading(true);
+                      const response = await fetch(endpoint);
+                      const data = await response.json();
                       
-                      try {
-                        setLoading(true);
-                        const response = await fetch(endpoint);
-                        const data = await response.json();
+                      if (data.status && data.data) {
+                        console.log('Bulunan eczane sayısı:', data.data.length);
+                        setPharmacies(data.data);
                         
-                        if (data.status && data.data) {
-                          console.log('Bulunan eczane sayısı:', data.data.length);
-                          setPharmacies(data.data);
-                          
-                          if (data.data.length > 0) {
-                            const firstPharmacy = data.data[0];
-                            setRegion({
-                              latitude: firstPharmacy.latitude,
-                              longitude: firstPharmacy.longitude,
-                              latitudeDelta: 0.02,
-                              longitudeDelta: 0.02,
-                            });
-                          }
+                        if (data.data.length > 0) {
+                          const firstPharmacy = data.data[0];
+                          setRegion({
+                            latitude: firstPharmacy.latitude,
+                            longitude: firstPharmacy.longitude,
+                            latitudeDelta: 0.02,
+                            longitudeDelta: 0.02,
+                          });
                         }
-                      } catch (error) {
-                        console.error('Eczaneler yüklenirken hata:', error);
-                        setPharmacies([]);
-                      } finally {
-                        setLoading(false);
                       }
+                    } catch (error) {
+                      console.error('Eczaneler yüklenirken hata:', error);
+                      setPharmacies([]);
+                    } finally {
+                      setLoading(false);
                     }
-                  }}
-                  loading={loading}
-                />
-              )}
-            </Animated.View>
-          </View>
+                    
+                    // İlçeleri yükle - ID ile
+                    await fetchDistricts(id);
+            }}
+            loading={citiesLoading}
+          />
 
-          {loading ? (
+          {selectedCity && (
+            <Select
+              label="İlçe"
+              value={selectedDistrict}
+              items={districts}
+                    onValueChange={async (name) => {
+                setSelectedDistrict(name);
+                      if (selectedCity && name) {
+                        const baseUrl = 'https://bf40-95-70-207-209.ngrok-free.app/api/eczaneler';
+                        const endpoint = `${baseUrl}/${selectedCity.toLowerCase()}/${name.toLowerCase()}`;
+                        console.log('İl ve ilçe için eczane endpoint:', endpoint);
+                        
+                        try {
+                          setLoading(true);
+                          const response = await fetch(endpoint);
+                          const data = await response.json();
+                          
+                          if (data.status && data.data) {
+                            console.log('Bulunan eczane sayısı:', data.data.length);
+                            setPharmacies(data.data);
+                            
+                            if (data.data.length > 0) {
+                              const firstPharmacy = data.data[0];
+                              setRegion({
+                                latitude: firstPharmacy.latitude,
+                                longitude: firstPharmacy.longitude,
+                                latitudeDelta: 0.02,
+                                longitudeDelta: 0.02,
+                              });
+                            }
+                          }
+                        } catch (error) {
+                          console.error('Eczaneler yüklenirken hata:', error);
+                          setPharmacies([]);
+                        } finally {
+                          setLoading(false);
+                        }
+                      }
+              }}
+              loading={loading}
+            />
+                )}
+              </Animated.View>
+            ) : (
+              <Animated.View 
+                style={[styles.searchBox]}
+                entering={SlideInDown.duration(1000).delay(200)}
+              >
+                <View style={styles.searchInputContainer}>
+                  <Ionicons name="search" size={20} color="#666" style={styles.searchIcon} />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Eczane ara..."
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    placeholderTextColor="#666"
+                  />
+                  {searchQuery.length > 0 && (
+                    <TouchableOpacity 
+                      onPress={() => setSearchQuery('')}
+                      style={styles.clearButton}
+                    >
+                      <Ionicons name="close-circle" size={20} color="#666" />
+                    </TouchableOpacity>
+          )}
+        </View>
+              </Animated.View>
+            )}
+      </View>
+
+      {loading ? (
             <Animated.View 
               style={styles.loadingContainer}
               entering={FadeIn}
               exiting={FadeOut}
             >
-              <ActivityIndicator size="large" color="#E53935" />
-              <Text style={styles.loadingText}>Eczaneler aranıyor...</Text>
+          <ActivityIndicator size="large" color="#E53935" />
+          <Text style={styles.loadingText}>Eczaneler aranıyor...</Text>
             </Animated.View>
-          ) : pharmacies.length > 0 ? (
-            showMap ? (
+      ) : pharmacies.length > 0 ? (
+        showMap ? (
               <Animated.View 
                 style={styles.fullMapContainer}
                 entering={SlideInRight}
                 exiting={SlideOutRight}
               >
-                <MapView
+            <MapView
                   ref={mapRef}
                   style={styles.fullMap}
-                  region={region}
+              region={region}
                   onRegionChangeComplete={setRegion}
                   provider={PROVIDER_DEFAULT}
-                  showsUserLocation={true}
+              showsUserLocation={true}
                   showsMyLocationButton={true}
-                >
-                  {pharmacies.map((pharmacy, index) => (
-                    <Marker
-                      key={index}
-                      coordinate={{
-                        latitude: pharmacy.latitude,
-                        longitude: pharmacy.longitude
-                      }}
-                      title={pharmacy.isim}
-                      description={pharmacy.adres}
+            >
+              {pharmacies.map((pharmacy, index) => (
+                <Marker
+                  key={index}
+                  coordinate={{
+                    latitude: pharmacy.latitude,
+                    longitude: pharmacy.longitude
+                  }}
+                  title={pharmacy.isim}
+                  description={pharmacy.adres}
                       onPress={() => handleMarkerPress(pharmacy)}
                     >
                       <Animated.View 
@@ -649,9 +932,9 @@ export default function Index() {
                           color={selectedPharmacy?.isim === pharmacy.isim ? '#fff' : '#E53935'} 
                         />
                       </Animated.View>
-                    </Marker>
-                  ))}
-                </MapView>
+                </Marker>
+              ))}
+            </MapView>
 
                 <Animated.View 
                   style={[styles.pharmacyDetailsCard, detailsAnimatedStyle]}
@@ -670,7 +953,7 @@ export default function Index() {
                           <View style={styles.pharmacyTitleContainer}>
                             <View style={styles.pharmacyIconContainer}>
                               <Ionicons name="medical" size={24} color="#fff" />
-                            </View>
+          </View>
                             <Text style={styles.pharmacyName}>{selectedPharmacy.isim}</Text>
                           </View>
                         </View>
@@ -712,65 +995,80 @@ export default function Index() {
                 entering={FadeIn}
                 exiting={FadeOut}
               >
-                <ScrollView style={styles.content}>
-                  <View style={styles.pharmacyList}>
-                    {pharmacies.map((pharmacy, index) => (
+          <ScrollView style={styles.content}>
+            <View style={styles.pharmacyList}>
+                    {(activeTab === 'all' ? pharmacies : filteredFavorites).map((pharmacy, index) => (
                       <Animated.View 
                         key={index} 
                         style={styles.pharmacyCard}
                         entering={SlideInDown.duration(500).delay(index * 100)}
                       >
-                        <View style={styles.pharmacyHeader}>
-                          <View style={styles.pharmacyTitleContainer}>
-                            <View style={styles.pharmacyIconContainer}>
-                              <Ionicons name="medical" size={24} color="#fff" />
-                            </View>
-                            <Text style={styles.pharmacyName}>{pharmacy.isim}</Text>
+                  <View style={styles.pharmacyHeader}>
+                    <View style={styles.pharmacyTitleContainer}>
+                      <View style={styles.pharmacyIconContainer}>
+                        <Ionicons name="medical" size={24} color="#fff" />
+                      </View>
+                      <Text style={styles.pharmacyName}>{pharmacy.isim}</Text>
+                    </View>
+                          <View style={styles.headerButtons}>
+                            <TouchableOpacity 
+                              style={styles.favoriteButton}
+                              onPress={() => toggleFavorite(pharmacy)}
+                            >
+                              <Ionicons 
+                                name={pharmacy.isFavorite ? "heart" : "heart-outline"} 
+                                size={24} 
+                                color={pharmacy.isFavorite ? "#E53935" : "#666"} 
+                              />
+                            </TouchableOpacity>
+                    <TouchableOpacity 
+                      style={styles.callButton}
+                      onPress={() => handleCallPharmacy(pharmacy.telefon)}
+                    >
+                      <Ionicons name="call" size={20} color="#fff" />
+                    </TouchableOpacity>
                           </View>
-                          <TouchableOpacity 
-                            style={styles.callButton}
-                            onPress={() => handleCallPharmacy(pharmacy.telefon)}
-                          >
-                            <Ionicons name="call" size={20} color="#fff" />
-                          </TouchableOpacity>
-                        </View>
-                        <View style={styles.pharmacyDetails}>
-                          <View style={styles.detailRow}>
-                            <View style={styles.detailIconContainer}>
-                              <Ionicons name="location" size={18} color="#E53935" />
-                            </View>
-                            <Text style={styles.pharmacyInfo}>{pharmacy.adres}</Text>
-                          </View>
-                          <View style={styles.detailRow}>
-                            <View style={styles.detailIconContainer}>
-                              <Ionicons name="call-outline" size={18} color="#E53935" />
-                            </View>
-                            <Text style={styles.pharmacyInfo}>{pharmacy.telefon}</Text>
-                          </View>
-                          <TouchableOpacity 
-                            style={styles.directionsButton}
-                            onPress={() => handleGetDirections(pharmacy)}
-                          >
-                            <Ionicons name="navigate" size={18} color="#fff" />
-                            <Text style={styles.directionsButtonText}>Yol Tarifi Al</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </Animated.View>
-                    ))}
                   </View>
-                </ScrollView>
+                  <View style={styles.pharmacyDetails}>
+                    <View style={styles.detailRow}>
+                      <View style={styles.detailIconContainer}>
+                        <Ionicons name="location" size={18} color="#E53935" />
+                      </View>
+                      <Text style={styles.pharmacyInfo}>{pharmacy.adres}</Text>
+                    </View>
+                    <View style={styles.detailRow}>
+                      <View style={styles.detailIconContainer}>
+                        <Ionicons name="call-outline" size={18} color="#E53935" />
+                      </View>
+                      <Text style={styles.pharmacyInfo}>{pharmacy.telefon}</Text>
+                    </View>
+                    <TouchableOpacity 
+                      style={styles.directionsButton}
+                      onPress={() => handleGetDirections(pharmacy)}
+                    >
+                      <Ionicons name="navigate" size={18} color="#fff" />
+                      <Text style={styles.directionsButtonText}>Yol Tarifi Al</Text>
+                    </TouchableOpacity>
+                  </View>
+                      </Animated.View>
+              ))}
+            </View>
+          </ScrollView>
               </Animated.View>
-            )
-          ) : selectedCity && selectedDistrict ? (
+        )
+      ) : selectedCity && selectedDistrict ? (
             <Animated.View 
               style={styles.emptyContainer}
               entering={FadeIn.duration(500)}
             >
-              <Ionicons name="medical-outline" size={64} color="#E53935" />
-              <Text style={styles.emptyText}>Nöbetçi eczane bulunamadı</Text>
-              <Text style={styles.emptySubtext}>Seçtiğiniz bölgede nöbetçi eczane bulunmamaktadır</Text>
+          <Ionicons name="medical-outline" size={64} color="#E53935" />
+          <Text style={styles.emptyText}>Nöbetçi eczane bulunamadı</Text>
+          <Text style={styles.emptySubtext}>Seçtiğiniz bölgede nöbetçi eczane bulunmamaktadır</Text>
             </Animated.View>
-          ) : null}
+      ) : null}
+
+      {/* Banner Reklam - geçici olarak devre dışı */}
+      {/* <BannerAd /> */}
         </>
       )}
     </View>
@@ -1185,17 +1483,178 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     color: '#E53935',
-    marginTop: 20,
+    marginBottom: 10,
     textAlign: 'center',
   },
   initialLoadingSubtext: {
     fontSize: 16,
     color: '#666',
-    marginTop: 10,
     textAlign: 'center',
   },
   detailsContentWrapper: {
     flex: 1,
     overflow: 'hidden',
   },
-}); 
+  button: {
+    backgroundColor: '#E53935',
+    padding: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  tabBar: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    marginTop: -5,
+    marginBottom: 10,
+    borderRadius: 15,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  tabButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  activeTab: {
+    backgroundColor: '#ffebee',
+  },
+  tabText: {
+    marginLeft: 8,
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '500',
+  },
+  activeTabText: {
+    color: '#E53935',
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  favoriteButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  searchInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8f9fa',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    height: 45,
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: '#212529',
+    paddingVertical: 8,
+  },
+  clearButton: {
+    padding: 4,
+  },
+  bannerContainer: {
+    width: '100%',
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 5,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
+});
+
+// Bildirim kaydı için yardımcı fonksiyon
+async function registerForPushNotificationsAsync() {
+  let token;
+
+  console.log('Push notification kaydı başlıyor...');
+  console.log('Cihaz bilgisi:', {
+    isDevice: Device.isDevice,
+    platform: Platform.OS,
+    modelName: Device.modelName,
+    osVersion: Device.osVersion,
+    deviceName: Device.deviceName
+  });
+
+  if (Platform.OS === 'android') {
+    console.log('Android için bildirim kanalı oluşturuluyor...');
+    await Notifications.setNotificationChannelAsync('default', {
+      name: 'default',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: '#FF231F7C',
+    });
+  }
+
+  if (Device.isDevice) {
+    console.log('Cihaz izinleri kontrol ediliyor...');
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    console.log('Mevcut izin durumu:', existingStatus);
+    
+    let finalStatus = existingStatus;
+    if (existingStatus !== 'granted') {
+      console.log('İzin isteniyor...');
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+      console.log('Yeni izin durumu:', finalStatus);
+    }
+    
+    if (finalStatus !== 'granted') {
+      console.log('İzin reddedildi');
+      Alert.alert('Bildirim İzni Gerekli', 'Nöbetçi eczane bildirimlerini alabilmek için bildirim iznine ihtiyacımız var.');
+      return null;
+    }
+    
+    console.log('Expo Push Token alınıyor...');
+    try {
+      const tokenData = await Notifications.getExpoPushTokenAsync({
+        projectId: Constants.expoConfig?.extra?.eas?.projectId,
+      });
+      console.log('Token Data:', tokenData);
+      token = tokenData.data;
+      console.log('Push Token alındı:', token);
+      console.log('Expo Project ID:', Constants.expoConfig?.extra?.eas?.projectId);
+    } catch (error) {
+      console.error('Push Token alınırken hata:', error);
+    }
+  } else {
+    console.log('Fiziksel cihaz değil, push notification desteklenmiyor');
+    Alert.alert('Fiziksel Cihaz Gerekli', 'Push bildirimleri sadece fiziksel cihazlarda çalışır.');
+    return null;
+  }
+
+  return token;
+} 

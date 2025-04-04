@@ -1,70 +1,68 @@
 {
   "expo": {
-    "name": "NobetciEczz",
-    "slug": "NobetciEczz",
+    "name": "Nöbetçi Eczaneler",
+    "slug": "nobetci-eczaneler",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "myapp",
-    "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
-    "plugins": [
-      "expo-router",
-      [
-        "expo-splash-screen",
-        {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
-        }
-      ],
-      [
-        "expo-location",
-        {
-          "locationAlwaysAndWhenInUsePermission": "Konumunuza nöbetçi eczaneleri göstermek için erişim gerekiyor."
-        }
-      ]
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff",
+      "tabletImage": "./assets/splash.png",
+      "tabletResizeMode": "contain",
+      "tabletBackgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.nobetcieczz.app",
+      "bundleIdentifier": "com.nobetcieczaneler.app",
+      "buildNumber": "1",
       "infoPlist": {
-        "UIViewControllerBasedStatusBarAppearance": false,
-        "UIStatusBarHidden": true,
-        "NSLocationWhenInUseUsageDescription": "Nöbetçi eczaneleri haritada göstermek için konum izni gerekiyor.",
-        "NSLocationAlwaysUsageDescription": "Arka planda çalışırken de size en yakın nöbetçi eczaneleri gösterebilmek için konum izni gerekiyor.",
-        "usesNonExemptEncryption": false
-      },
-      "config": {
-        "usesNonExemptEncryption": false
+        "NSLocationWhenInUseUsageDescription": "Size en yakın nöbetçi eczaneleri gösterebilmek için konum izninize ihtiyacımız var.",
+        "NSLocationAlwaysUsageDescription": "Size en yakın nöbetçi eczaneleri gösterebilmek için konum izninize ihtiyacımız var.",
+        "UIBackgroundModes": ["location", "fetch", "remote-notification"]
       }
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.nobetcieczz.app",
+      "package": "com.nobetcieczaneler.app",
+      "versionCode": 1,
       "permissions": [
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
-      ],
-      "androidStatusBar": {
-        "backgroundColor": "#E53935",
-        "translucent": true,
-        "barStyle": "light-content",
-        "hidden": true
-      },
-      "softwareKeyboardLayoutMode": "pan"
+        "ACCESS_FINE_LOCATION",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "INTERNET"
+      ]
     },
     "web": {
-      "bundler": "metro",
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/favicon.png"
     },
-    "experiments": {
-      "typedRoutes": true
-    }
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#E53935",
+          "sounds": ["./assets/notification-sound.wav"]
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "10a487b4-39a8-4e91-9a23-72780eef67be"
+      }
+    },
+    "owner": "sametbkmz",
+    "privacy": "public",
+    "description": "Size en yakın nöbetçi eczaneleri bulun ve yol tarifi alın.",
+    "primaryColor": "#E53935"
   }
 }
